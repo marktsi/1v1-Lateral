@@ -479,6 +479,9 @@ function planPass(idx, noWait, ov){
 // ph.shot = [x, z]: the holder strikes the ball (as it lies) to that point, e.g. into a mini goal — no
 // receiver. A short adjusting step to the ball first, then the same strike as a pass, struck firmly.
 // DRILL.gk: the keeper's index, or several (a goal at each end) — the one nearest the shot goes for it
+// DRILL.gkLate (opt-in): on a long shot the keeper reads it and goes late, landing as the ball arrives
+// (default: the dive starts with the strike)
+const diveT = P=>DRILL.gkLate ? Math.max(P.tKick, P.tArr-.5) : P.tKick;
 function keeperFor(tgt, idx){
   const g=DRILL.gk; if(g==null) return -1; if(!Array.isArray(g)) return g;
   let b=-1, bd=1e9; g.forEach(k=>{ const d=dist(W(PH[idx].pl[k]), tgt); if(d<bd){ bd=d; b=k; } }); return b;
@@ -660,7 +663,7 @@ function planPhase(idx, carry){
     if(P && P.shot && i===P.gk){                                          // keeper: pushes off sideways into the dive as the shot is struck
       const A=P.A, M=P.meet, k=Math.abs(M[1]-A[1])>.1 ? clamp((a[1]-A[1])/(M[1]-A[1]), 0, 1) : 1, xb=A[0]+(M[0]-A[0])*k;
       const st=clamp(xb-a[0], -DRILL.gkPush||-.5, DRILL.gkPush||.5);
-      if(Math.abs(st)>.05){ moves[i].push({ from:a, to:[a[0]+st, a[1]], t0:Math.max(busy[i], P.tKick+DIVE.load), dur:.45 }); end=Math.max(end, P.tKick+.6); }
+      if(Math.abs(st)>.05){ moves[i].push({ from:a, to:[a[0]+st, a[1]], t0:Math.max(busy[i], diveT(P)+DIVE.load), dur:.45 }); end=Math.max(end, diveT(P)+.6); }
       return;
     }
     if(P && i===P.p){                                                         // (already at the ball — no step-up)
@@ -895,7 +898,7 @@ function updateFig(f, i, tt, t, dt){
   if(sp>1.6) ty += .4*sstep(1.6,2.8,sp)*wrap(Math.atan2(f.vx,f.vz)-ty);
   const P=SC.P, kicking = P && i===P.p && tt<P.tKick+.35;
   f.yaw += wrap(ty-f.yaw)*Math.min(1, dt*(kicking ? 10 : f.role==='att' ? 6 : 7));
-  if(P && P.shot && i===P.gk && tt>P.tKick && tt<P.tKick+2.0){ if(P.gkYaw==null) P.gkYaw=f.yaw; f.yaw=P.gkYaw; }   // square on through the dive
+  if(P && P.shot && i===P.gk && tt>diveT(P) && tt<diveT(P)+2.0){ if(P.gkYaw==null) P.gkYaw=f.yaw; f.yaw=P.gkYaw; }   // square on through the dive
   // Head and eyes: on the ball; the player on the ball scans the grid, glancing down at it now and then
   const b=SC.ball, db=Math.hypot(b[0]-f.x, b[1]-f.z), resting = i===SC.holder && !(P && tt<P.tRest+.5);
   let ht = resting ? .75*Math.sin(t*1.5+f.ph) : clamp(wrap(Math.atan2(b[0]-f.x, b[1]-f.z)-f.yaw), -1.35, 1.35);
@@ -925,7 +928,7 @@ function updateFig(f, i, tt, t, dt){
   }
   f.dive=null;
   if(P && P.shot && i===P.gk){                                            // the keeper dives for it
-    const u=tt-P.tKick;
+    const u=tt-diveT(P);
     if(u>0 && u<2.2){
       if(!P.gkS) P.gkS=Math.sign(bodyOf([f.x,f.z], f.yaw, P.meet)[0])||1;    // side fixed at the strike
       q=mixQ(q, diveQ(u, P.gkS), sstep(0,.08,u)*(1-sstep(2.0,2.2,u)));
@@ -1085,6 +1088,22 @@ const DRILL = { teams:['red','red','red','blue','blue','blue'], roles:['att','at
 
 // ── Scene ────────────────────────────────────────────────────────────
 makeFigs();
+// Ground that reaches behind the camera would flip and flash as the camera moves: clip every ground
+// polygon and line at a near plane in front of the lens (identical output for anything fully in view)
+const NEAR = .3;
+const nearCut = (a, b)=>{ const u=(NEAR-a[2])/(b[2]-a[2]); return [a[0]+(b[0]-a[0])*u, a[1]+(b[1]-a[1])*u, NEAR]; };
+const scr = c=>{ const s=toScreen(cam, c); return s[0].toFixed(1)+' '+s[1].toFixed(1); };
+polyD = function(pts){
+  const C=pts.map(p=>toCam(cam, p)), out=[];
+  C.forEach((a,k)=>{ const b=C[(k+1)%C.length], ia=a[2]>NEAR, ib=b[2]>NEAR; if(ia) out.push(a); if(ia!==ib) out.push(nearCut(a, b)); });
+  return out.length<3 ? '' : 'M'+out.map(scr).join('L')+'Z';
+};
+lineD = function(a, b){
+  let A=toCam(cam, a), B=toCam(cam, b);
+  if(A[2]<=NEAR && B[2]<=NEAR) return '';
+  if(A[2]<=NEAR) A=nearCut(A, B); else if(B[2]<=NEAR) B=nearCut(B, A);
+  return 'M'+scr(A)+'L'+scr(B);
+};
 const TAGS = ['1','2','3','1','2','3'];
 const pool = makePool('pool', 300);
 const shadows = makeShadows('shadows', figs.length+1);
